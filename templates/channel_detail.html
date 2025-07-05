@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>频道详情 - YouTube RSS监控系统</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        .video-card {
+            transition: all 0.3s ease-in-out;
+            border: none;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+        .video-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+        }
+        .video-thumbnail {
+            width: 100%;
+            height: 180px;
+            object-fit: cover;
+        }
+        .new-video-badge {
+            position: absolute;
+            bottom: 8px;
+            left: 8px;
+            background: linear-gradient(45deg, #ff6b6b, #ee5a52);
+            color: white;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: bold;
+            box-shadow: 0 2px 8px rgba(255, 107, 107, 0.3);
+            z-index: 25;
+        }
+        .video-info {
+            position: relative;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        .video-selection {
+            position: absolute;
+            top: 8px;
+            left: 8px;
+            z-index: 15;
+        }
+        .video-selection input[type="checkbox"] {
+            transform: scale(1.2);
+            accent-color: #667eea;
+        }
+        .toast-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1050;
+        }
+        .batch-actions {
+            position: sticky;
+            top: 20px;
+            z-index: 100;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        
+        /* 下载按钮样式 */
+        .download-btn {
+            transition: all 0.3s ease;
+            border-radius: 50%;
+            width: 36px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(45deg, #28a745, #20c997);
+            border: none;
+            box-shadow: 0 2px 8px rgba(40, 167, 69, 0.3);
+        }
+        
+        .video-card:hover .download-btn {
+            opacity: 1 !important;
+            transform: scale(1.15);
+            box-shadow: 0 4px 15px rgba(40, 167, 69, 0.4);
+        }
+        
+        /* 卡片内容样式 */
+        .card-body {
+            background: white;
+            padding: 1rem;
+        }
+        
+        .card-title a {
+            color: #2c3e50;
+            font-weight: 600;
+            line-height: 1.3;
+        }
+        
+        .card-title a:hover {
+            color: #667eea;
+        }
+        
+        .card-footer {
+            background: #f8f9fa;
+            border-top: 1px solid #e9ecef;
+        }
+        
+        /* 频道信息卡片 */
+        .channel-info-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 15px;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.2);
+        }
+        
+        /* 批量操作工具栏 */
+        .batch-actions {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+        }
+    </style>
+</head>
+<body>
+    <!-- 导航栏 -->
+    <nav class="navbar navbar-expand-lg navbar-dark" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+        <div class="container">
+            <a class="navbar-brand fw-bold" href="/">
+                <i class="bi bi-youtube me-2"></i> YouTube RSS监控系统
+            </a>
+            <div class="navbar-nav ms-auto">
+                <a class="nav-link px-3" href="/" style="background: rgba(255,255,255,0.1); border-radius: 20px;">
+                    <i class="bi bi-house me-1"></i> 返回主页
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- 主要内容 -->
+    <div class="container mt-4">
+        <!-- 频道信息 -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card channel-info-card">
+                    <div class="card-body">
+                        <h2 id="channelName" class="card-title mb-3">
+                            <i class="bi bi-tv"></i> 加载中...
+                        </h2>
+                        <p id="channelInfo" class="card-text mb-0" style="opacity: 0.9;">正在加载频道信息...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 批量操作工具栏 -->
+        <div class="batch-actions" id="batchActions" style="display: none;">
+            <div class="d-flex justify-content-between align-items-center">
+                <div class="fw-bold">
+                    <i class="bi bi-check-square me-2"></i>
+                    已选中 <span id="selectedCount" class="badge bg-light text-dark px-3 py-2 ms-1">0</span> 个视频
+                </div>
+                <div>
+                    <button class="btn btn-warning me-2" onclick="markSelectedAsOld()" 
+                            style="border-radius: 20px;">
+                        <i class="bi bi-check-circle me-1"></i> 标记为已查看
+                    </button>
+                    <button class="btn btn-outline-light" onclick="clearSelection()" 
+                            style="border-radius: 20px;">
+                        <i class="bi bi-x-circle me-1"></i> 取消选择
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 视频列表 -->
+        <div class="row">
+            <div class="col-12">
+                <div class="d-flex justify-content-between align-items-center mb-4">
+                    <h4 class="text-primary fw-bold mb-0">
+                        <i class="bi bi-collection-play me-2"></i>频道视频
+                    </h4>
+                    <div>
+                        <button id="selectAllBtn" class="btn btn-primary me-2" onclick="toggleSelectAll()" 
+                                style="border-radius: 20px; background: linear-gradient(45deg, #667eea, #764ba2);">
+                            <i class="bi bi-check-all me-1"></i> 全选
+                        </button>
+                        <button class="btn btn-outline-primary" onclick="selectNewVideos()" 
+                                style="border-radius: 20px; border-color: #667eea; color: #667eea;">
+                            <i class="bi bi-star me-1"></i> 选择新视频
+                        </button>
+                    </div>
+                </div>
+                
+                <div id="videosList" class="row">
+                    <!-- 视频列表将在这里动态加载 -->
+                    <div class="col-12 text-center">
+                        <div class="spinner-border" role="status">
+                            <span class="visually-hidden">加载中...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast 通知容器 -->
+    <div class="toast-container"></div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <script>
+        // 全局变量
+        const channelId = '{{ channel_id }}';
+        let allVideos = [];
+        let selectedVideos = new Set();
+
+        // 页面加载完成后初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            loadChannelVideos();
+        });
+
+        // 显示通知
+        function showToast(message, type = 'info') {
+            const toastHtml = `
+                <div class="toast align-items-center text-white bg-${type === 'error' ? 'danger' : type === 'success' ? 'success' : 'primary'} border-0" role="alert">
+                    <div class="d-flex">
+                        <div class="toast-body">${message}</div>
+                        <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+                    </div>
+                </div>
+            `;
+            
+            const toastContainer = document.querySelector('.toast-container');
+            toastContainer.insertAdjacentHTML('beforeend', toastHtml);
+            
+            const toastElement = toastContainer.lastElementChild;
+            const toast = new bootstrap.Toast(toastElement);
+            toast.show();
+            
+            // 自动移除
+            toastElement.addEventListener('hidden.bs.toast', () => {
+                toastElement.remove();
+            });
+        }
+
+        // 加载频道视频
+        async function loadChannelVideos() {
+            try {
+                const response = await fetch(`/api/channels/${channelId}/videos`);
+                const data = await response.json();
+                
+                if (data.success) {
+                    allVideos = data.videos;
+                    displayVideos(allVideos);
+                    
+                    // 更新频道信息
+                    if (allVideos.length > 0) {
+                        const channelName = allVideos[0].channel_name;
+                        document.getElementById('channelName').innerHTML = `<i class="bi bi-tv"></i> ${channelName}`;
+                        document.getElementById('channelInfo').textContent = `共 ${allVideos.length} 个视频`;
+                    }
+                } else {
+                    showToast(data.error || '加载视频失败', 'error');
+                }
+            } catch (error) {
+                showToast('网络错误', 'error');
+            }
+        }
+
+        // 显示视频列表
+        function displayVideos(videos) {
+            const videosList = document.getElementById('videosList');
+            
+            if (videos.length === 0) {
+                videosList.innerHTML = '<div class="col-12 text-center text-muted">该频道暂无视频</div>';
+                return;
+            }
+
+            videosList.innerHTML = videos.map(video => `
+                <div class="col-md-6 col-lg-4 mb-4">
+                    <div class="card video-card h-100">
+                        <div class="video-info position-relative">
+                            ${video.is_new ? '<div class="new-video-badge"><i class="bi bi-star-fill me-1"></i>新</div>' : ''}
+                            <div class="video-selection">
+                                <input type="checkbox" class="form-check-input" 
+                                       id="video_${video.video_id}" 
+                                       value="${video.video_id}"
+                                       onchange="toggleVideoSelection('${video.video_id}')">
+                            </div>
+                            <div class="position-absolute" style="top: 8px; right: 8px; z-index: 10;">
+                                <button class="download-btn" 
+                                        onclick="downloadThumbnail('${video.video_id}')"
+                                        title="下载PNG格式封面图片"
+                                        style="opacity: 0.85;">
+                                    <i class="bi bi-download text-white"></i>
+                                </button>
+                            </div>
+                            <img src="${video.thumbnail_url}" 
+                                 alt="${video.title}" 
+                                 class="video-thumbnail"
+                                 onerror="this.src='https://via.placeholder.com/320x180?text=No+Image'">
+                        </div>
+                        <div class="card-body">
+                            <h6 class="card-title mb-3">
+                                <a href="${video.video_url}" target="_blank" class="text-decoration-none">
+                                    ${video.title}
+                                </a>
+                            </h6>
+                            <div class="small">
+                                <div class="mb-2">
+                                    <i class="bi bi-calendar text-primary me-1"></i> 
+                                    <span class="text-muted">发布:</span> ${video.published_at}
+                                </div>
+                                <div class="mb-2">
+                                    <i class="bi bi-clock text-success me-1"></i> 
+                                    <span class="text-muted">获取:</span> ${video.discovered_at}
+                                </div>
+                                <div class="mb-3">
+                                    <i class="bi bi-link-45deg text-info me-1"></i> 
+                                    <span class="text-muted">ID:</span> 
+                                    <code class="small">${video.video_id}</code>
+                                </div>
+
+                            </div>
+                        </div>
+                        <div class="card-footer">
+                            <button class="btn btn-sm ${video.is_new ? 'btn-warning' : 'btn-outline-secondary'}" 
+                                    onclick="markSingleAsOld('${video.video_id}')"
+                                    ${!video.is_new ? 'disabled' : ''}>
+                                <i class="bi ${video.is_new ? 'bi-check-circle' : 'bi-check'}"></i> 
+                                ${video.is_new ? '标记为已查看' : '已标记'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // 切换视频选择状态
+        function toggleVideoSelection(videoId) {
+            const checkbox = document.getElementById(`video_${videoId}`);
+            if (checkbox.checked) {
+                selectedVideos.add(videoId);
+            } else {
+                selectedVideos.delete(videoId);
+            }
+            updateBatchActions();
+        }
+
+        // 更新批量操作界面
+        function updateBatchActions() {
+            const batchActions = document.getElementById('batchActions');
+            const selectedCount = document.getElementById('selectedCount');
+            
+            selectedCount.textContent = selectedVideos.size;
+            
+            if (selectedVideos.size > 0) {
+                batchActions.style.display = 'block';
+            } else {
+                batchActions.style.display = 'none';
+            }
+        }
+
+        // 切换全选状态
+        let isAllSelected = false;
+        function toggleSelectAll() {
+            const selectAllBtn = document.getElementById('selectAllBtn');
+            
+            if (isAllSelected) {
+                // 取消全选
+                clearSelection();
+                selectAllBtn.innerHTML = '<i class="bi bi-check-all me-1"></i> 全选';
+                isAllSelected = false;
+            } else {
+                // 全选
+                allVideos.forEach(video => {
+                    const checkbox = document.getElementById(`video_${video.video_id}`);
+                    if (checkbox) {
+                        checkbox.checked = true;
+                        selectedVideos.add(video.video_id);
+                    }
+                });
+                updateBatchActions();
+                selectAllBtn.innerHTML = '<i class="bi bi-x-circle me-1"></i> 取消全选';
+                isAllSelected = true;
+            }
+        }
+
+        // 选择新视频
+        function selectNewVideos() {
+            clearSelection();
+            allVideos.filter(video => video.is_new).forEach(video => {
+                const checkbox = document.getElementById(`video_${video.video_id}`);
+                if (checkbox) {
+                    checkbox.checked = true;
+                    selectedVideos.add(video.video_id);
+                }
+            });
+            updateBatchActions();
+        }
+
+        // 清除选择
+        function clearSelection() {
+            selectedVideos.clear();
+            document.querySelectorAll('.form-check-input').forEach(checkbox => {
+                checkbox.checked = false;
+            });
+            updateBatchActions();
+        }
+
+        // 标记选中视频为旧视频
+        async function markSelectedAsOld() {
+            if (selectedVideos.size === 0) {
+                showToast('请先选择要标记的视频', 'error');
+                return;
+            }
+
+            if (!confirm(`确定要将 ${selectedVideos.size} 个视频标记为旧视频吗？`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/videos/mark-old', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        video_ids: Array.from(selectedVideos)
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showToast(data.message, 'success');
+                    clearSelection();
+                    loadChannelVideos(); // 重新加载视频列表
+                } else {
+                    showToast(data.error || '标记失败', 'error');
+                }
+            } catch (error) {
+                showToast('网络错误', 'error');
+            }
+        }
+
+        // 标记单个视频为旧视频
+        async function markSingleAsOld(videoId) {
+            if (!confirm('确定要将此视频标记为旧视频吗？')) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/videos/mark-old', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        video_ids: [videoId]
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showToast('视频已标记为旧视频', 'success');
+                    loadChannelVideos(); // 重新加载视频列表
+                } else {
+                    showToast(data.error || '标记失败', 'error');
+                }
+            } catch (error) {
+                showToast('网络错误', 'error');
+            }
+        }
+
+        // 下载视频缩略图
+        function downloadThumbnail(videoId) {
+            // 创建一个隐藏的下载链接
+            const link = document.createElement('a');
+            link.href = `/api/download-thumbnail/${videoId}`;
+            link.download = ''; // 让服务器决定文件名
+            link.style.display = 'none';
+            
+            // 添加到页面并触发下载
+            document.body.appendChild(link);
+            link.click();
+            
+            // 清理
+            document.body.removeChild(link);
+            
+            showToast('正在下载缩略图...', 'info');
+        }
+    </script>
+</body>
+</html> 
