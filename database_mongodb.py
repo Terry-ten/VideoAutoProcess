@@ -256,6 +256,49 @@ class MongoDBManager:
             self.logger.error(f"更新视频状态失败: {e}")
             return False
     
+    def delete_video(self, video_id: str) -> bool:
+        """删除单个视频"""
+        try:
+            result = self.db.videos.delete_one({'video_id': video_id})
+            
+            if result.deleted_count > 0:
+                self.logger.info(f"删除视频成功: {video_id}")
+                return True
+            else:
+                self.logger.warning(f"未找到要删除的视频: {video_id}")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"删除视频失败: {e}")
+            return False
+    
+    def delete_channel_and_videos(self, channel_id: str) -> Dict[str, int]:
+        """删除频道及其所有视频"""
+        try:
+            # 先删除该频道的所有视频
+            videos_result = self.db.videos.delete_many({'channel_id': channel_id})
+            videos_deleted = videos_result.deleted_count
+            
+            # 再删除频道记录
+            channel_result = self.db.channels.delete_one({'channel_id': channel_id})
+            channels_deleted = channel_result.deleted_count
+            
+            # 删除相关的监控日志
+            logs_result = self.db.monitor_logs.delete_many({'channel_id': channel_id})
+            logs_deleted = logs_result.deleted_count
+            
+            self.logger.info(f"删除频道完成: {channel_id}, 删除了 {videos_deleted} 个视频, {logs_deleted} 个日志")
+            
+            return {
+                'channels_deleted': channels_deleted,
+                'videos_deleted': videos_deleted,
+                'logs_deleted': logs_deleted
+            }
+                
+        except Exception as e:
+            self.logger.error(f"删除频道失败: {e}")
+            return {'channels_deleted': 0, 'videos_deleted': 0, 'logs_deleted': 0}
+    
     def get_channel_videos(self, channel_id: str, limit: int = None) -> List[Dict]:
         """获取指定频道的所有视频"""
         try:

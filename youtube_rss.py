@@ -6,20 +6,90 @@ YouTube RSS监控系统 - 无需API密钥
 """
 
 import re
+import ssl
 import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from typing import List, Dict, Optional
 from urllib.parse import urlparse, parse_qs
 import logging
+from urllib3.util.retry import Retry
+from requests.adapters import HTTPAdapter
+import urllib3
+import subprocess
+
+# 禁用SSL警告
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 class YouTubeRSSMonitor:
     def __init__(self):
         self.logger = logging.getLogger(__name__)
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+        self.session = self._create_session()
+    
+    def _create_session(self):
+        """创建优化的requests session"""
+        session = requests.Session()
+        
+        # 配置重试策略
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+        )
+        
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        session.mount('http://', adapter)
+        session.mount('https://', adapter)
+        
+        # 设置用户代理和其他headers
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive',
         })
+        
+        return session
+    
+    def _safe_request(self, url: str, timeout: int = 10) -> Optional[requests.Response]:
+        """安全的HTTP请求，处理SSL问题"""
+        try:
+            # 首先尝试正常请求
+            response = self.session.get(url, timeout=timeout)
+            return response
+        except (ssl.SSLError, requests.exceptions.SSLError) as e:
+            self.logger.warning(f"SSL错误，尝试不验证SSL证书: {e}")
+            try:
+                # 如果SSL失败，尝试不验证证书
+                response = self.session.get(url, timeout=timeout, verify=False)
+                return response
+            except Exception as e2:
+                self.logger.error(f"请求完全失败: {e2}")
+                return None
+        except Exception as e:
+            self.logger.error(f"请求失败: {e}")
+            return None
+    
+    def _curl_request(self, url: str) -> Optional[str]:
+        """使用系统curl命令获取数据（备用方案）"""
+        try:
+            # 使用curl命令，忽略SSL证书验证
+            cmd = ['curl', '-k', '-s', '--max-time', '10', url]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            
+            if result.returncode == 0 and result.stdout:
+                return result.stdout
+            else:
+                self.logger.error(f"curl请求失败: {result.stderr}")
+                return None
+                
+        except subprocess.TimeoutExpired:
+            self.logger.error("curl请求超时")
+            return None
+        except Exception as e:
+            self.logger.error(f"curl请求异常: {e}")
+            return None
     
     def extract_channel_id(self, url: str) -> Optional[str]:
         """从各种YouTube URL格式提取频道ID"""
@@ -54,9 +124,9 @@ class YouTubeRSSMonitor:
         try:
             # 尝试访问频道主页获取真实的频道ID
             url = f"https://www.youtube.com/@{username}"
-            response = self.session.get(url, timeout=10)
+            response = self._safe_request(url)
             
-            if response.status_code == 200:
+            if response and response.status_code == 200:
                 # 从页面HTML中提取频道ID
                 pattern = r'"channelId":"([^"]+)"'
                 match = re.search(pattern, response.text)
@@ -79,9 +149,9 @@ class YouTubeRSSMonitor:
         """通过自定义名称获取频道ID"""
         try:
             url = f"https://www.youtube.com/c/{custom_name}"
-            response = self.session.get(url, timeout=10)
+            response = self._safe_request(url)
             
-            if response.status_code == 200:
+            if response and response.status_code == 200:
                 pattern = r'"channelId":"([^"]+)"'
                 match = re.search(pattern, response.text)
                 if match:
@@ -103,10 +173,10 @@ class YouTubeRSSMonitor:
             
             # 获取频道RSS信息
             rss_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
-            response = self.session.get(rss_url, timeout=10)
+            response = self._safe_request(rss_url)
             
-            if response.status_code != 200:
-                self.logger.error(f"获取RSS失败: {response.status_code}")
+            if not response or response.status_code != 200:
+                self.logger.error(f"获取RSS失败: {response.status_code if response else 'No response'}")
                 return None
             
             # 解析RSS XML
@@ -141,14 +211,25 @@ class YouTubeRSSMonitor:
         """获取频道最新视频"""
         try:
             rss_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
-            response = self.session.get(rss_url, timeout=10)
             
-            if response.status_code != 200:
-                self.logger.error(f"获取RSS失败: {response.status_code}")
-                return []
+            # 首先尝试requests
+            response = self._safe_request(rss_url)
+            xml_content = None
+            
+            if response and response.status_code == 200:
+                xml_content = response.content
+            else:
+                # 如果requests失败，尝试curl
+                self.logger.info("requests失败，尝试使用curl")
+                curl_result = self._curl_request(rss_url)
+                if curl_result:
+                    xml_content = curl_result.encode('utf-8')
+                else:
+                    self.logger.error(f"获取RSS失败: 所有方法都失败")
+                    return []
             
             # 解析RSS XML
-            root = ET.fromstring(response.content)
+            root = ET.fromstring(xml_content)
             
             ns = {
                 'atom': 'http://www.w3.org/2005/Atom',
@@ -251,7 +332,7 @@ def test_rss_monitor():
             for i, video in enumerate(videos, 1):
                 print(f"  {i}. {video['title']}")
                 print(f"     发布: {video['published_at'].strftime('%Y-%m-%d %H:%M')}")
-                print(f"     URL: {video['url']}")
+                print(f"     URL: {video['video_url']}")
                 
         else:
             print("❌ 获取频道信息失败")

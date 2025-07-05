@@ -50,42 +50,30 @@
             <a class="navbar-brand" href="#">
                 <i class="bi bi-youtube"></i> YouTube RSS监控系统
             </a>
-            <div class="navbar-nav ms-auto">
-                <span class="navbar-text" id="systemStatus">
-                    <i class="bi bi-circle-fill status-stopped"></i> 系统状态检查中...
-                </span>
-            </div>
         </div>
     </nav>
 
     <!-- 主要内容 -->
     <div class="container mt-4">
-        <!-- 系统状态卡片 -->
+        <!-- 自动监控状态栏 -->
         <div class="row mb-4">
             <div class="col-md-12">
                 <div class="card">
                     <div class="card-header">
-                        <h5 class="mb-0"><i class="bi bi-gear"></i> 系统控制</h5>
+                        <h5 class="mb-0"><i class="bi bi-gear"></i> 自动监控</h5>
                     </div>
                     <div class="card-body">
-                        <div class="row">
-                            <div class="col-md-6">
-                                <button class="btn btn-custom me-2" onclick="testSystem()">
-                                    <i class="bi bi-check-circle"></i> 测试系统
-                                </button>
-                                <button class="btn btn-success me-2" onclick="checkAllUpdates()">
-                                    <i class="bi bi-arrow-clockwise"></i> 一键获取全部更新
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div class="d-flex align-items-center">
+                                <span class="me-2">监控状态:</span>
+                                <span id="monitorStatus" class="status-stopped">已停止</span>
+                                <button id="toggleMonitor" class="btn btn-sm btn-outline-success ms-2" onclick="toggleAutoMonitor()">
+                                    启动
                                 </button>
                             </div>
-                            <div class="col-md-6">
-                                <div class="d-flex align-items-center">
-                                    <span class="me-2">自动监控:</span>
-                                    <span id="monitorStatus" class="status-stopped">已停止</span>
-                                    <button id="toggleMonitor" class="btn btn-sm btn-outline-success ms-2" onclick="toggleAutoMonitor()">
-                                        启动
-                                    </button>
-                                </div>
-                            </div>
+                            <button class="btn btn-success" onclick="checkAllUpdates()">
+                                <i class="bi bi-arrow-clockwise"></i> 检查所有频道更新
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -104,13 +92,13 @@
                     <div class="card-body">
                         <div class="input-group">
                             <input type="text" class="form-control" id="channelUrl" 
-                                   placeholder="输入YouTube频道URL，如: https://www.youtube.com/@mkbhd">
-                            <button class="btn btn-custom" onclick="addChannel()">
+                                   placeholder="输入YouTube频道URL，如: https://www.youtube.com/@aivideoschool">
+                            <button class="btn btn-custom" onclick="addChannelSmart()">
                                 <i class="bi bi-plus"></i> 添加
                             </button>
                         </div>
                         <small class="text-muted">
-                            支持格式: @username, /c/channelname, /channel/UCxxxxxx
+                            支持格式: @username, /c/channelname, /channel/UCxxxxxx, 完整URL等
                         </small>
                     </div>
                 </div>
@@ -187,7 +175,6 @@
 
         // 页面加载完成后初始化
         document.addEventListener('DOMContentLoaded', function() {
-            testSystem();
             loadChannels();
             loadStats();
             loadRecentVideos();
@@ -224,22 +211,7 @@
             });
         }
 
-        // 测试系统
-        async function testSystem() {
-            try {
-                const response = await fetch('/api/test-system');
-                const data = await response.json();
-                
-                const statusElement = document.getElementById('systemStatus');
-                if (data.success && data.database && data.rss_monitor) {
-                    statusElement.innerHTML = '<i class="bi bi-circle-fill status-running"></i> 系统正常';
-                } else {
-                    statusElement.innerHTML = '<i class="bi bi-circle-fill status-stopped"></i> 系统异常';
-                }
-            } catch (error) {
-                document.getElementById('systemStatus').innerHTML = '<i class="bi bi-circle-fill status-stopped"></i> 连接失败';
-            }
-        }
+
 
         // 加载频道列表
         async function loadChannels() {
@@ -281,8 +253,8 @@
             }
         }
 
-        // 添加频道
-        async function addChannel() {
+        // 智能添加频道
+        async function addChannelSmart() {
             const urlInput = document.getElementById('channelUrl');
             const url = urlInput.value.trim();
             
@@ -292,7 +264,9 @@
             }
             
             try {
-                const response = await fetch('/api/channels', {
+                showToast('正在添加频道...', 'info');
+                
+                const response = await fetch('/api/channels/smart', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({url: url})
@@ -301,7 +275,7 @@
                 const data = await response.json();
                 
                 if (data.success) {
-                    showToast('频道添加成功', 'success');
+                    showToast('频道添加成功！', 'success');
                     urlInput.value = '';
                     loadChannels();
                     loadStats();

@@ -35,23 +35,7 @@ def index():
     """主页"""
     return render_template('index.html')
 
-@app.route('/api/test-system', methods=['GET'])
-def test_system():
-    """测试系统"""
-    try:
-        db_ok = monitor.db.test_connection()
-        test_url = "https://www.youtube.com/@mkbhd"
-        channel_info = monitor.rss_monitor.get_channel_info(test_url)
-        rss_ok = channel_info is not None
-        
-        return jsonify({
-            "success": True,
-            "database": db_ok,
-            "rss_monitor": rss_ok,
-            "message": "系统测试完成"
-        })
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
+
 
 @app.route('/api/channels', methods=['GET'])
 def get_channels():
@@ -82,16 +66,46 @@ def add_channel():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
-@app.route('/api/channels/<channel_id>', methods=['DELETE'])
-def remove_channel(channel_id):
-    """删除频道"""
+@app.route('/api/channels/direct', methods=['POST'])
+def add_channel_direct():
+    """直接添加频道（绕过YouTube连接问题）"""
     try:
-        success = monitor.db.update_channel_status(channel_id, False)
+        data = request.get_json()
+        channel_id = data.get('channel_id')
+        channel_name = data.get('channel_name')
+        channel_url = data.get('channel_url')
+        description = data.get('description', '手动添加的频道')
+        
+        if not channel_id or not channel_name or not channel_url:
+            return jsonify({"success": False, "error": "频道ID、名称和URL不能为空"})
+        
+        # 直接添加到数据库
+        success = monitor.db.add_channel(
+            channel_id=channel_id,
+            channel_name=channel_name,
+            channel_url=channel_url,
+            description=description
+        )
         
         if success:
-            return jsonify({"success": True, "message": "频道已删除"})
+            return jsonify({"success": True, "message": "频道添加成功"})
         else:
-            return jsonify({"success": False, "error": "频道删除失败"})
+            return jsonify({"success": False, "error": "频道添加失败"})
+            
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+@app.route('/api/channels/<channel_id>', methods=['DELETE'])
+def remove_channel(channel_id):
+    """删除频道及其所有视频"""
+    try:
+        result = monitor.db.delete_channel_and_videos(channel_id)
+        
+        if result['channels_deleted'] > 0:
+            message = f"频道删除成功，同时删除了 {result['videos_deleted']} 个视频"
+            return jsonify({"success": True, "message": message})
+        else:
+            return jsonify({"success": False, "error": "频道删除失败，可能频道不存在"})
             
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
@@ -335,6 +349,142 @@ def stop_auto_monitor():
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
+
+@app.route('/api/channels/smart', methods=['POST'])
+def add_channel_smart():
+    """智能添加频道（处理各种URL格式）"""
+    try:
+        data = request.get_json()
+        url = data.get('url', '').strip()
+        
+        if not url:
+            return jsonify({"success": False, "error": "频道URL不能为空"})
+        
+        # 首先尝试使用RSS监控器获取真实的频道信息
+        try:
+            channel_info = monitor.rss_monitor.get_channel_info(url)
+            if channel_info:
+                # 使用RSS监控器获取的真实频道信息
+                success = monitor.db.add_channel(
+                    channel_id=channel_info['channel_id'],
+                    channel_name=channel_info['channel_name'],
+                    channel_url=channel_info['channel_url'],
+                    description=channel_info.get('description', '通过RSS监控的频道')
+                )
+                
+                if success:
+                    return jsonify({"success": True, "message": "频道添加成功"})
+                else:
+                    return jsonify({"success": False, "error": "频道添加失败"})
+        except Exception as rss_error:
+            print(f"RSS获取失败，尝试备用方法: {rss_error}")
+        
+        # 如果RSS方法失败，使用备用的URL解析方法
+        channel_info = extract_channel_info_from_url(url)
+        
+        if not channel_info:
+            return jsonify({"success": False, "error": "无法解析频道信息，请检查URL格式或网络连接"})
+        
+        # 添加到数据库
+        success = monitor.db.add_channel(
+            channel_id=channel_info['channel_id'],
+            channel_name=channel_info['channel_name'],
+            channel_url=channel_info['channel_url'],
+            description=channel_info.get('description', '通过URL添加的频道')
+        )
+        
+        if success:
+            return jsonify({"success": True, "message": "频道添加成功"})
+        else:
+            return jsonify({"success": False, "error": "频道添加失败"})
+            
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+def extract_channel_info_from_url(url):
+    """从URL提取频道信息"""
+    import re
+    from urllib.parse import urlparse, parse_qs
+    
+    try:
+        # 标准化URL
+        if not url.startswith('http'):
+            if url.startswith('@'):
+                url = f"https://www.youtube.com/{url}"
+            elif url.startswith('/'):
+                url = f"https://www.youtube.com{url}"
+            else:
+                url = f"https://www.youtube.com/@{url}"
+        
+        parsed = urlparse(url)
+        path = parsed.path
+        
+        # 提取频道信息
+        channel_info = None
+        
+        # 处理 @username 格式
+        if '/@' in path:
+            username = path.split('/@')[1].split('/')[0]
+            channel_info = {
+                'channel_id': f"@{username}",  # 临时使用username作为ID
+                'channel_name': username,
+                'channel_url': f"https://www.youtube.com/@{username}",
+                'description': f"通过@{username}添加的频道"
+            }
+        
+        # 处理 /c/channelname 格式
+        elif '/c/' in path:
+            channel_name = path.split('/c/')[1].split('/')[0]
+            channel_info = {
+                'channel_id': f"c_{channel_name}",  # 临时使用channel_name作为ID
+                'channel_name': channel_name,
+                'channel_url': f"https://www.youtube.com/c/{channel_name}",
+                'description': f"通过/c/{channel_name}添加的频道"
+            }
+        
+        # 处理 /channel/UCxxxxxx 格式
+        elif '/channel/' in path:
+            channel_id = path.split('/channel/')[1].split('/')[0]
+            if channel_id.startswith('UC'):
+                channel_info = {
+                    'channel_id': channel_id,
+                    'channel_name': channel_id,  # 临时使用ID作为名称
+                    'channel_url': f"https://www.youtube.com/channel/{channel_id}",
+                    'description': f"通过频道ID {channel_id}添加的频道"
+                }
+        
+        # 如果无法解析，尝试生成一个基本的频道信息
+        if not channel_info:
+            # 从URL中提取可能的频道名称
+            import hashlib
+            url_hash = hashlib.md5(url.encode()).hexdigest()[:8]
+            channel_info = {
+                'channel_id': f"manual_{url_hash}",
+                'channel_name': f"频道_{url_hash}",
+                'channel_url': url,
+                'description': f"手动添加的频道: {url}"
+            }
+        
+        return channel_info
+        
+    except Exception as e:
+        print(f"提取频道信息失败: {e}")
+        return None
+
+@app.route('/api/videos/<video_id>', methods=['DELETE'])
+def delete_video(video_id):
+    """删除单个视频"""
+    try:
+        success = monitor.db.delete_video(video_id)
+        
+        if success:
+            return jsonify({"success": True, "message": "视频删除成功"})
+        else:
+            return jsonify({"success": False, "error": "视频删除失败"})
+            
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
 
 if __name__ == '__main__':
     print("🌐 启动YouTube RSS监控系统 Web界面")
